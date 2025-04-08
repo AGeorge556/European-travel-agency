@@ -1,0 +1,15 @@
+{
+  "files": {
+    "main.css": "/AGeorge556/European-travel-agency/static/css/main.e6c13ad2.css",
+    "main.js": "/AGeorge556/European-travel-agency/static/js/main.7483fcf0.js",
+    "static/js/453.ebe2c629.chunk.js": "/AGeorge556/European-travel-agency/static/js/453.ebe2c629.chunk.js",
+    "index.html": "/AGeorge556/European-travel-agency/index.html",
+    "main.e6c13ad2.css.map": "/AGeorge556/European-travel-agency/static/css/main.e6c13ad2.css.map",
+    "main.7483fcf0.js.map": "/AGeorge556/European-travel-agency/static/js/main.7483fcf0.js.map",
+    "453.ebe2c629.chunk.js.map": "/AGeorge556/European-travel-agency/static/js/453.ebe2c629.chunk.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.e6c13ad2.css",
+    "static/js/main.7483fcf0.js"
+  ]
+}
