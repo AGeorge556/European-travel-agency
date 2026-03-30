@@ -8,26 +8,40 @@ const worldData = require('world-atlas/countries-110m.json');
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { feature: topoFeature } = require('topojson-client');
 
-// ── ISO 3166-1 numeric IDs ────────────────────────────────────────────────────
-const COUNTRY_ISO: Record<string, number> = {
+// ── Country ID lookups ────────────────────────────────────────────────────────
+// By country display-name (predefined cities)
+const COUNTRY_ISO_BY_NAME: Record<string, number> = {
   'United Kingdom': 826, 'United States': 840, 'Japan': 392,
-  'Australia': 36, 'France': 250, 'United Arab Emirates': 784,
-  'Singapore': 702, 'Brazil': 76, 'South Africa': 710,
-  'India': 356, 'Germany': 276, 'Canada': 124,
+  'Australia': 36,  'France': 250,  'United Arab Emirates': 784,
+  'Singapore': 702, 'Brazil': 76,   'South Africa': 710,
+  'India': 356,     'Germany': 276, 'Canada': 124,
+};
+
+// By ISO 3166-1 alpha-2 code (searched cities via Nominatim)
+const COUNTRY_ISO_BY_ALPHA2: Record<string, number> = {
+  'GB':826,'US':840,'JP':392,'AU':36, 'FR':250,'AE':784,'SG':702,'BR':76,
+  'ZA':710,'IN':356,'DE':276,'CA':124,'CN':156,'RU':643,'IT':380,'ES':724,
+  'MX':484,'KR':410,'ID':360,'TR':792,'SA':682,'AR':32, 'PL':616,'NL':528,
+  'SE':752,'NO':578,'CH':756,'BE':56, 'AT':40, 'PT':620,'GR':300,'CZ':203,
+  'HU':348,'RO':642,'UA':804,'EG':818,'NG':566,'KE':404,'ET':231,'GH':288,
+  'MA':504,'DZ':12, 'TN':788,'TZ':834,'MZ':508,'ZW':716,'TH':764,'VN':704,
+  'MY':458,'PH':608,'PK':586,'BD':50, 'NZ':554,'CL':152,'CO':170,'PE':604,
+  'VE':862,'EC':218,'BO':68, 'UY':858,'NP':524,'LK':144,'MM':104,'MN':496,
+  'KZ':398,'IR':364,'IQ':368,'SY':760,'JO':400,'IL':376,'LB':422,'KW':414,
+  'QA':634,'OM':512,'YE':887,'FI':246,'DK':208,'IE':372,'SK':703,'HR':191,
+  'BA':70, 'RS':688,'BG':100,'LV':428,'LT':440,'EE':233,'BY':112,'MD':498,
+  'LY':434,'SO':706,'SD':729,'ML':466,'NE':562,'SN':686,'CI':384,
+  'CD':180,'CM':120,'AO':24, 'ZM':894,'MW':454,'AM':51, 'GE':268,'AZ':31,
 };
 
 const COL_DEFAULT  = 0x00ff88;
-const COL_DIMMED   = 0x003d20;
 const COL_SELECTED = 0xff2244;
-
-const PIN_DEFAULT_COL  = 0x00e5ff;
-const PIN_SELECTED_COL = 0xffd740;
-
-// Zoom bounds (camera Z distance from globe centre)
-const CAM_MIN = 2.6;
+const PIN_IDLE_COL = 0x006688;
+const PIN_SEL_COL  = 0xffd740;
+const CAM_MIN = 2.5;
 const CAM_MAX = 9.0;
 
-// ── Math helpers ──────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 const latLonToVec3 = (lat: number, lon: number, r: number): THREE.Vector3 => {
   const phi   = (90 - lat)  * (Math.PI / 180);
   const theta = (lon + 180) * (Math.PI / 180);
@@ -40,36 +54,24 @@ const latLonToVec3 = (lat: number, lon: number, r: number): THREE.Vector3 => {
 
 const lonToRotY = (lon: number): number => -(lon + 90) * (Math.PI / 180);
 
-// ── Build a map-pin group: sphere head + thin spike pointing outward ──────────
+/** Small pin: cone spike + sphere head pointing radially outward */
 const makePinGroup = (lat: number, lon: number, color: number): THREE.Group => {
-  const group  = new THREE.Group();
-  const mat    = new THREE.MeshBasicMaterial({ color });
-
-  // Spike – thin cone, base at surface, tip outward
-  const spike  = new THREE.Mesh(new THREE.ConeGeometry(0.007, 0.055, 7), mat);
-  spike.position.y = 0.027;
-  group.add(spike);
-
-  // Head – sphere sitting on top of spike
-  const head   = new THREE.Mesh(new THREE.SphereGeometry(0.018, 10, 10), mat);
-  head.position.y = 0.062;
-  group.add(head);
-
-  // Place on sphere surface and orient radially outward
-  const surfPos = latLonToVec3(lat, lon, 2.0);
-  group.position.copy(surfPos);
-  group.quaternion.setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    surfPos.clone().normalize()
-  );
-
-  return group;
+  const g   = new THREE.Group();
+  const mat = new THREE.MeshBasicMaterial({ color });
+  const spike = new THREE.Mesh(new THREE.ConeGeometry(0.004, 0.04, 6), mat);
+  spike.position.y = 0.02;
+  g.add(spike);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.012, 8, 8), mat);
+  head.position.y = 0.046;
+  g.add(head);
+  const pos = latLonToVec3(lat, lon, 2.0);
+  g.position.copy(pos);
+  g.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), pos.clone().normalize());
+  return g;
 };
 
-// ── Build a flat ring lying tangent to the sphere surface ─────────────────────
-const makeRing = (
-  lat: number, lon: number, radius: number, color: number
-): THREE.LineLoop => {
+/** Flat ring lying tangent to the sphere at a given lat/lon */
+const makeRing = (lat: number, lon: number, radius: number, color: number): THREE.LineLoop => {
   const pts: THREE.Vector3[] = [];
   for (let i = 0; i <= 64; i++) {
     const a = (i / 64) * Math.PI * 2;
@@ -77,14 +79,13 @@ const makeRing = (
   }
   const ring = new THREE.LineLoop(
     new THREE.BufferGeometry().setFromPoints(pts),
-    new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending })
+    new THREE.LineBasicMaterial({
+      color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending,
+    })
   );
-  const surfPos = latLonToVec3(lat, lon, 2.02);
-  ring.position.copy(surfPos);
-  ring.quaternion.setFromUnitVectors(
-    new THREE.Vector3(0, 1, 0),
-    surfPos.clone().normalize()
-  );
+  const pos = latLonToVec3(lat, lon, 2.022);
+  ring.position.copy(pos);
+  ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), pos.clone().normalize());
   return ring;
 };
 
@@ -96,99 +97,110 @@ interface EarthProps {
 }
 
 const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => {
-  const containerRef    = useRef<HTMLDivElement>(null);
-  const earthRef        = useRef<THREE.Mesh | null>(null);
-  const rendererRef     = useRef<THREE.WebGLRenderer | null>(null);
-  const cameraRef       = useRef<THREE.PerspectiveCamera | null>(null);
-  const frameRef        = useRef<number | null>(null);
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const earthRef      = useRef<THREE.Mesh | null>(null);
+  const rendererRef   = useRef<THREE.WebGLRenderer | null>(null);
+  const cameraRef     = useRef<THREE.PerspectiveCamera | null>(null);
+  const frameRef      = useRef<number | null>(null);
+  const pinGroupsRef  = useRef<THREE.Group[]>([]);
+  const pinHeadsRef   = useRef<THREE.Mesh[]>([]);
+  const selDotRef     = useRef<THREE.Mesh | null>(null);
+  const selRingRef    = useRef<THREE.LineLoop | null>(null);
 
-  // Pin refs: head meshes for raycasting, full groups for show/hide
-  const pinHeadsRef     = useRef<THREE.Mesh[]>([]);
-  const pinGroupsRef    = useRef<THREE.Group[]>([]);
-
-  // Selected-city indicator
-  const selDotRef       = useRef<THREE.Mesh | null>(null);
-  const selRingRef      = useRef<THREE.LineLoop | null>(null);
-
-  // Country outlines
   const countryLinesRef = useRef<Map<number, THREE.LineLoop[]>>(new Map());
   const defaultMatRef   = useRef<THREE.LineBasicMaterial | null>(null);
-  const dimmedMatRef    = useRef<THREE.LineBasicMaterial | null>(null);
   const selectedMatRef  = useRef<THREE.LineBasicMaterial | null>(null);
+  const prevIsoRef      = useRef<number | null>(null);
 
-  // Animation / interaction state
-  const autoRotate   = useRef(true);
-  const isDragging   = useRef(false);
-  const prevMouse    = useRef({ x: 0, y: 0 });
-  const dragVelX     = useRef(0);   // inertia
-  const dragVelY     = useRef(0);
-  const targetRotY   = useRef(0);
-  const targetCamZ   = useRef(5);
-  const targetCamY   = useRef(0);
-  const pulseT       = useRef(0);
-  const lastTsRef    = useRef(0);   // for delta-time
+  // Animation
+  const autoRotate       = useRef(true);
+  const isDragging       = useRef(false);
+  const rotationSettled  = useRef(false);   // ← key: stops re-targeting after user drag
+  const prevMouse        = useRef({ x: 0, y: 0 });
+  const dragVelX         = useRef(0);
+  const dragVelY         = useRef(0);
+  const targetRotY       = useRef(0);
+  const targetCamZ       = useRef(5);
+  const targetCamY       = useRef(0);
+  const pulseT           = useRef(0);
+  const lastTsRef        = useRef(0);
 
-  const onSelectRef  = useRef(onCitySelect);
+  const onSelectRef = useRef(onCitySelect);
   useEffect(() => { onSelectRef.current = onCitySelect; }, [onCitySelect]);
-  const citiesRef    = useRef(cities);
+  const citiesRef = useRef(cities);
   useEffect(() => { citiesRef.current = cities; }, [cities]);
 
-  // ── City-selection side effects ───────────────────────────────────────────
+  // ── City selection effect ─────────────────────────────────────────────────
   useEffect(() => {
     const defaultMat   = defaultMatRef.current;
-    const dimmedMat    = dimmedMatRef.current;
     const selectedMat  = selectedMatRef.current;
     const countryLines = countryLinesRef.current;
 
-    if (!selectedCity) {
-      autoRotate.current = true;
-      targetCamZ.current = 5;
-      targetCamY.current = 0;
+    // Restore previous country outline
+    if (prevIsoRef.current !== null && defaultMat) {
+      const prev = countryLines.get(prevIsoRef.current);
+      if (prev) prev.forEach(l => { l.material = defaultMat; });
+    }
 
+    // Restore all regular pin groups visibility
+    pinGroupsRef.current.forEach(g => { g.visible = true; });
+
+    if (!selectedCity) {
+      autoRotate.current    = true;
+      rotationSettled.current = true;
+      targetCamZ.current    = 5;
+      targetCamY.current    = 0;
       if (selDotRef.current)  selDotRef.current.visible  = false;
       if (selRingRef.current) selRingRef.current.visible = false;
-
-      if (defaultMat)
-        countryLines.forEach(ls => ls.forEach(l => { l.material = defaultMat; }));
+      prevIsoRef.current = null;
       return;
     }
 
-    autoRotate.current = false;
-    targetRotY.current = lonToRotY(selectedCity.longitude);
-    targetCamZ.current = 3.0;
-    targetCamY.current = Math.sin(selectedCity.latitude * Math.PI / 180) * 0.85;
+    // ── Rotation: start fresh animation to face city ──────────────────────
+    autoRotate.current      = false;
+    rotationSettled.current = false;    // allow the fly-to animation
+    targetRotY.current      = lonToRotY(selectedCity.longitude);
+    targetCamZ.current      = 3.0;
+    targetCamY.current      = Math.sin(selectedCity.latitude * Math.PI / 180) * 0.85;
 
-    // Move selected-city dot + ring
+    // ── Move selection indicator ──────────────────────────────────────────
     const lat = selectedCity.latitude;
     const lon = selectedCity.longitude;
-    const surfPos = latLonToVec3(lat, lon, 2.025);
-    const outward = surfPos.clone().normalize();
-    const quat    = new THREE.Quaternion().setFromUnitVectors(
-      new THREE.Vector3(0, 1, 0), outward
-    );
-
     if (selDotRef.current) {
-      selDotRef.current.position.copy(surfPos);
+      selDotRef.current.position.copy(latLonToVec3(lat, lon, 2.025));
       selDotRef.current.visible = true;
     }
     if (selRingRef.current) {
-      selRingRef.current.position.copy(latLonToVec3(lat, lon, 2.022));
-      selRingRef.current.quaternion.copy(quat);
+      const pos = latLonToVec3(lat, lon, 2.023);
+      selRingRef.current.position.copy(pos);
+      selRingRef.current.quaternion.setFromUnitVectors(
+        new THREE.Vector3(0, 1, 0), pos.clone().normalize()
+      );
       selRingRef.current.visible = true;
     }
 
-    // Country colour swap
-    if (defaultMat && dimmedMat && selectedMat) {
-      const isoId = COUNTRY_ISO[selectedCity.country] ?? null;
-      countryLines.forEach(ls => ls.forEach(l => { l.material = dimmedMat; }));
-      if (isoId !== null) {
-        const ls = countryLines.get(isoId);
-        if (ls) ls.forEach(l => { l.material = selectedMat; });
-      }
+    // ── Hide the predefined pin for this city (if any) ────────────────────
+    const pinIdx = citiesRef.current.findIndex(
+      c => c.name === selectedCity.name && c.country === selectedCity.country
+    );
+    if (pinIdx !== -1) pinGroupsRef.current[pinIdx].visible = false;
+
+    // ── Country outline: only selected country turns red ──────────────────
+    const isoId =
+      COUNTRY_ISO_BY_NAME[selectedCity.country] ??
+      (selectedCity.countryCode
+        ? COUNTRY_ISO_BY_ALPHA2[selectedCity.countryCode.toUpperCase()]
+        : undefined) ??
+      null;
+
+    if (isoId !== null && selectedMat) {
+      const lines = countryLines.get(isoId);
+      if (lines) lines.forEach(l => { l.material = selectedMat; });
     }
+    prevIsoRef.current = isoId;
   }, [selectedCity]);
 
-  // ── One-time scene bootstrap ──────────────────────────────────────────────
+  // ── Scene bootstrap (runs once) ───────────────────────────────────────────
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -206,19 +218,18 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // Ambient light (just for atmosphere mesh)
     scene.add(new THREE.AmbientLight(0xffffff, 0.4));
 
     // Stars
-    const starPos = new Float32Array(7000 * 3);
-    for (let i = 0; i < starPos.length; i++) starPos[i] = (Math.random() - 0.5) * 400;
+    const sp = new Float32Array(7000 * 3);
+    for (let i = 0; i < sp.length; i++) sp[i] = (Math.random() - 0.5) * 400;
     const sg = new THREE.BufferGeometry();
-    sg.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+    sg.setAttribute('position', new THREE.BufferAttribute(sp, 3));
     scene.add(new THREE.Points(sg, new THREE.PointsMaterial({
       color: 0xffffff, size: 0.06, transparent: true, opacity: 0.85, sizeAttenuation: true,
     })));
 
-    // Dark globe body
+    // Globe body
     const earth = new THREE.Mesh(
       new THREE.SphereGeometry(2, 72, 72),
       new THREE.MeshBasicMaterial({ color: 0x040d1a })
@@ -226,7 +237,7 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
     scene.add(earth);
     earthRef.current = earth;
 
-    // Atmosphere rim
+    // Atmosphere
     scene.add(new THREE.Mesh(
       new THREE.SphereGeometry(2.22, 48, 48),
       new THREE.MeshLambertMaterial({ color: 0x001a55, transparent: true, opacity: 0.28, side: THREE.BackSide })
@@ -239,37 +250,31 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
       })
     ));
 
-    // ── Country outline materials ─────────────────────────────────────────
-    const defaultMat = new THREE.LineBasicMaterial({ color: COL_DEFAULT,  transparent: true, opacity: 0.72 });
-    const dimmedMat  = new THREE.LineBasicMaterial({ color: COL_DIMMED,   transparent: true, opacity: 0.40 });
-    const selectedMat= new THREE.LineBasicMaterial({
+    // Country line materials
+    const defaultMat  = new THREE.LineBasicMaterial({ color: COL_DEFAULT,  transparent: true, opacity: 0.7 });
+    const selectedMat = new THREE.LineBasicMaterial({
       color: COL_SELECTED, transparent: true, opacity: 1.0, blending: THREE.AdditiveBlending,
     });
     defaultMatRef.current  = defaultMat;
-    dimmedMatRef.current   = dimmedMat;
     selectedMatRef.current = selectedMat;
 
-    // ── Country outlines from topojson ────────────────────────────────────
+    // Country outlines
     const geoJSON    = topoFeature(worldData, worldData.objects.countries);
     const countryMap = countryLinesRef.current;
-
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (geoJSON.features as any[]).forEach((feat: any) => {
       const id   = feat.id !== undefined ? parseInt(String(feat.id), 10) : NaN;
       const geom = feat.geometry;
       if (!geom) return;
-
       const polygons: number[][][][] =
         geom.type === 'Polygon' ? [geom.coordinates] : geom.coordinates;
-
       const loops: THREE.LineLoop[] = [];
-      polygons.forEach(poly => {
+      polygons.forEach((poly: number[][][]) => {
         poly.forEach((ring: number[][]) => {
           if (ring.length < 2) return;
           const pts = ring.map((c: number[]) => latLonToVec3(c[1], c[0], 2.018));
           const loop = new THREE.LineLoop(
-            new THREE.BufferGeometry().setFromPoints(pts),
-            defaultMat
+            new THREE.BufferGeometry().setFromPoints(pts), defaultMat
           );
           earth.add(loop);
           loops.push(loop);
@@ -278,44 +283,43 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
       if (!isNaN(id)) countryMap.set(id, loops);
     });
 
-    // ── City pins – real geometry (sphere head + cone spike) ──────────────
-    const pinHeads:  THREE.Mesh[]  = [];
-    const pinGroups: THREE.Group[] = [];
-
+    // City pins (small, subtle – act as click targets)
+    const groups: THREE.Group[] = [];
+    const heads:  THREE.Mesh[]  = [];
     citiesRef.current.forEach(city => {
-      const group = makePinGroup(city.latitude, city.longitude, PIN_DEFAULT_COL);
-      earth.add(group);
-      pinGroups.push(group);
-      // Head is the second child (index 1) – store for raycasting
-      pinHeads.push(group.children[1] as THREE.Mesh);
+      const grp = makePinGroup(city.latitude, city.longitude, PIN_IDLE_COL);
+      earth.add(grp);
+      groups.push(grp);
+      heads.push(grp.children[1] as THREE.Mesh);
     });
-    pinHeadsRef.current  = pinHeads;
-    pinGroupsRef.current = pinGroups;
+    pinGroupsRef.current = groups;
+    pinHeadsRef.current  = heads;
 
-    // ── Selected-city indicator: gold dot + pulsing ring ──────────────────
+    // Selected-city dot
     const selDot = new THREE.Mesh(
       new THREE.SphereGeometry(0.026, 12, 12),
-      new THREE.MeshBasicMaterial({ color: PIN_SELECTED_COL })
+      new THREE.MeshBasicMaterial({ color: PIN_SEL_COL })
     );
     selDot.visible = false;
     earth.add(selDot);
     selDotRef.current = selDot;
 
-    // Ring placeholder (repositioned on city change)
-    const selRing = makeRing(0, 0, 0.1, PIN_SELECTED_COL);
+    // Selected-city pulsing ring (placeholder – repositioned on selection)
+    const selRing = makeRing(0, 0, 0.1, PIN_SEL_COL);
     selRing.visible = false;
     earth.add(selRing);
     selRingRef.current = selRing;
 
-    // ── Interaction ───────────────────────────────────────────────────────
+    // ── Input handlers ────────────────────────────────────────────────────
     const raycaster = new THREE.Raycaster();
     const mouse2D   = new THREE.Vector2();
 
     const onMouseDown = (e: MouseEvent) => {
-      isDragging.current = true;
-      dragVelX.current   = 0;
-      dragVelY.current   = 0;
-      prevMouse.current  = { x: e.clientX, y: e.clientY };
+      isDragging.current     = true;
+      rotationSettled.current = true;   // user takes control – stop fly-to animation
+      dragVelX.current       = 0;
+      dragVelY.current       = 0;
+      prevMouse.current      = { x: e.clientX, y: e.clientY };
       container.style.cursor = 'grabbing';
     };
 
@@ -341,13 +345,12 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
     };
 
     const onMouseUp = () => {
-      isDragging.current = false;
+      isDragging.current     = false;
       container.style.cursor = 'grab';
     };
 
     const onClick = (e: MouseEvent) => {
-      // Ignore if it was a drag (velocity-based heuristic)
-      if (Math.abs(dragVelX.current) > 0.008 || Math.abs(dragVelY.current) > 0.008) return;
+      if (Math.abs(dragVelX.current) > 0.01 || Math.abs(dragVelY.current) > 0.01) return;
       const rect = container.getBoundingClientRect();
       mouse2D.x  =  ((e.clientX - rect.left) / rect.width)  * 2 - 1;
       mouse2D.y  = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
@@ -361,17 +364,16 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      // Normalise across browsers (deltaMode 0=px, 1=lines, 2=page)
       const delta = e.deltaMode === 0 ? e.deltaY * 0.004 : e.deltaY * 0.12;
       targetCamZ.current = Math.max(CAM_MIN, Math.min(CAM_MAX, targetCamZ.current + delta));
     };
 
     const onTouchStart = (e: TouchEvent) => {
       if (e.touches.length !== 1) return;
-      isDragging.current = true;
-      dragVelX.current   = 0;
-      dragVelY.current   = 0;
-      prevMouse.current  = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+      isDragging.current      = true;
+      rotationSettled.current = true;
+      dragVelX.current        = 0;
+      prevMouse.current       = { x: e.touches[0].clientX, y: e.touches[0].clientY };
     };
     const onTouchMove = (e: TouchEvent) => {
       if (!isDragging.current || e.touches.length !== 1 || !earthRef.current) return;
@@ -397,54 +399,55 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
     container.addEventListener('touchmove',  onTouchMove,  { passive: true });
     container.addEventListener('touchend',   onTouchEnd);
 
-    // ── Animation loop (delta-time normalised + drag inertia) ─────────────
-    const LERP = 0.06;   // per normalised 16.67 ms frame
+    // ── Animation loop ────────────────────────────────────────────────────
+    const LERP = 0.055;
 
     const animate = (ts: number) => {
       frameRef.current = requestAnimationFrame(animate);
-
-      // Delta-time factor: 1.0 at 60fps, scales up/down with frame rate
-      const dt    = lastTsRef.current ? Math.min((ts - lastTsRef.current) / 16.667, 3) : 1;
+      const dt = lastTsRef.current ? Math.min((ts - lastTsRef.current) / 16.667, 3) : 1;
       lastTsRef.current = ts;
-      pulseT.current += 0.045 * dt;
+      pulseT.current   += 0.045 * dt;
 
       const e   = earthRef.current;
       const cam = cameraRef.current;
       if (!e || !cam) return;
 
       if (isDragging.current) {
-        // Live drag – handled in onMouseMove
+        // live drag handled in onMouseMove
       } else if (autoRotate.current) {
-        // Blend inertia into auto-rotation then decay
         dragVelX.current *= Math.pow(0.88, dt);
         e.rotation.y += (0.0008 + dragVelX.current) * dt;
       } else {
-        // Apply drag inertia, then lerp toward target
+        // Apply residual drag inertia
         dragVelX.current *= Math.pow(0.88, dt);
         dragVelY.current *= Math.pow(0.88, dt);
         e.rotation.y += dragVelX.current * dt;
         e.rotation.x  = Math.max(-0.6, Math.min(0.6,
           e.rotation.x + dragVelY.current * dt));
 
-        // Shortest-path rotation to face selected city
-        let diff = targetRotY.current - e.rotation.y;
-        while (diff >  Math.PI) diff -= 2 * Math.PI;
-        while (diff < -Math.PI) diff += 2 * Math.PI;
-        e.rotation.y += diff * LERP * dt;
-        e.rotation.x += (0 - e.rotation.x) * LERP * dt;
+        // Fly-to animation — only until the user grabs the globe
+        if (!rotationSettled.current) {
+          let diff = targetRotY.current - e.rotation.y;
+          while (diff >  Math.PI) diff -= 2 * Math.PI;
+          while (diff < -Math.PI) diff += 2 * Math.PI;
+          e.rotation.y += diff * LERP * dt;
+          e.rotation.x += (0 - e.rotation.x) * LERP * dt;
+          // Mark settled once close enough
+          if (Math.abs(diff) < 0.008) rotationSettled.current = true;
+        }
       }
 
-      // Smooth camera zoom & tilt
+      // Camera zoom + tilt (always smooth)
       cam.position.z += (targetCamZ.current - cam.position.z) * LERP * dt;
       cam.position.y += (targetCamY.current - cam.position.y) * LERP * dt;
       cam.lookAt(0, 0, 0);
 
       // Pulse selected ring
       if (selRingRef.current?.visible) {
-        const s = 1.0 + Math.sin(pulseT.current) * 0.18;
+        const s = 1.0 + Math.sin(pulseT.current) * 0.2;
         selRingRef.current.scale.set(s, 1, s);
         (selRingRef.current.material as THREE.LineBasicMaterial).opacity =
-          0.7 + Math.sin(pulseT.current) * 0.25;
+          0.65 + Math.sin(pulseT.current) * 0.3;
       }
 
       renderer.render(scene, cam);

@@ -22,4 +22,5 @@ export interface City {
   description?: string;
   flag: string;
   timezone: string;
+  countryCode?: string;   // ISO 3166-1 alpha-2 (e.g. "FR") – populated for searched cities
 } 
