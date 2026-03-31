@@ -121,7 +121,8 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
   const dragVelY         = useRef(0);
   const targetRotY       = useRef(0);
   const targetCamZ       = useRef(5);
-  const targetCamY       = useRef(0);
+  const targetLookY      = useRef(0);   // world-space Y the camera should centre on
+  const currentLookY     = useRef(0);   // smoothly lerped value used in cam.lookAt
   const pulseT           = useRef(0);
   const lastTsRef        = useRef(0);
 
@@ -149,7 +150,7 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
       autoRotate.current    = true;
       rotationSettled.current = true;
       targetCamZ.current    = 5;
-      targetCamY.current    = 0;
+      targetLookY.current   = 0;
       if (selDotRef.current)  selDotRef.current.visible  = false;
       if (selRingRef.current) selRingRef.current.visible = false;
       prevIsoRef.current = null;
@@ -161,7 +162,8 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
     rotationSettled.current = false;    // allow the fly-to animation
     targetRotY.current      = lonToRotY(selectedCity.longitude);
     targetCamZ.current      = 3.0;
-    targetCamY.current      = Math.sin(selectedCity.latitude * Math.PI / 180) * 0.85;
+    // City world-space Y after globe rotates to face it: r * sin(lat)
+    targetLookY.current     = 2.0 * Math.sin(selectedCity.latitude * Math.PI / 180);
 
     // ── Move selection indicator ──────────────────────────────────────────
     const lat = selectedCity.latitude;
@@ -437,10 +439,11 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
         }
       }
 
-      // Camera zoom + tilt (always smooth)
+      // Camera zoom (always smooth); camera stays on Z axis, lookAt centres on city lat
       cam.position.z += (targetCamZ.current - cam.position.z) * LERP * dt;
-      cam.position.y += (targetCamY.current - cam.position.y) * LERP * dt;
-      cam.lookAt(0, 0, 0);
+      cam.position.y  = 0;
+      currentLookY.current += (targetLookY.current - currentLookY.current) * LERP * dt;
+      cam.lookAt(0, currentLookY.current, 0);
 
       // Pulse selected ring
       if (selRingRef.current?.visible) {
