@@ -122,7 +122,9 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
   const targetRotY       = useRef(0);
   const targetCamZ       = useRef(5);
   const targetLookY      = useRef(0);   // world-space Y the camera should centre on
-  const currentLookY     = useRef(0);   // smoothly lerped value used in cam.lookAt
+  const currentLookY     = useRef(0);
+  const targetLookZ      = useRef(0);   // world-space Z (city surface Z after rotation)
+  const currentLookZ     = useRef(0);
   const pulseT           = useRef(0);
   const lastTsRef        = useRef(0);
 
@@ -151,6 +153,7 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
       rotationSettled.current = true;
       targetCamZ.current    = 5;
       targetLookY.current   = 0;
+      targetLookZ.current   = 0;
       if (selDotRef.current)  selDotRef.current.visible  = false;
       if (selRingRef.current) selRingRef.current.visible = false;
       prevIsoRef.current = null;
@@ -162,8 +165,10 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
     rotationSettled.current = false;    // allow the fly-to animation
     targetRotY.current      = lonToRotY(selectedCity.longitude);
     targetCamZ.current      = 3.0;
-    // City world-space Y after globe rotates to face it: r * sin(lat)
-    targetLookY.current     = 2.0 * Math.sin(selectedCity.latitude * Math.PI / 180);
+    // After globe rotates to face the city, the city sits at (0, r·sin(lat), r·cos(lat))
+    const latRad = selectedCity.latitude * Math.PI / 180;
+    targetLookY.current = 2.0 * Math.sin(latRad);
+    targetLookZ.current = 2.0 * Math.cos(latRad);
 
     // ── Move selection indicator ──────────────────────────────────────────
     const lat = selectedCity.latitude;
@@ -439,11 +444,13 @@ const Earth: React.FC<EarthProps> = ({ selectedCity, cities, onCitySelect }) => 
         }
       }
 
-      // Camera zoom (always smooth); camera stays on Z axis, lookAt centres on city lat
+      // Camera zoom (always smooth); camera stays on Z axis
       cam.position.z += (targetCamZ.current - cam.position.z) * LERP * dt;
       cam.position.y  = 0;
+      // Lerp lookAt toward city surface position (0, r·sin(lat), r·cos(lat))
       currentLookY.current += (targetLookY.current - currentLookY.current) * LERP * dt;
-      cam.lookAt(0, currentLookY.current, 0);
+      currentLookZ.current += (targetLookZ.current - currentLookZ.current) * LERP * dt;
+      cam.lookAt(0, currentLookY.current, currentLookZ.current);
 
       // Pulse selected ring
       if (selRingRef.current?.visible) {
